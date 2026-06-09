@@ -434,35 +434,29 @@
         </div>
     </div>
     <script>
-       // --- ⚠️ НАСТРОЙКИ БАЗЫ ДАННЫХ SUPABASE (ВСТАВЬ СВОИ) ⚠️ ---
+// --- ⚠️ НАСТРОЙКИ БАЗЫ ДАННЫХ SUPABASE (ВСТАВЬ СВОИ) ⚠️ ---
         const SUPABASE_URL = "https://bgkyseldpfefdqlwnsjm.supabase.co"; 
         const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJna3lzZWxkcGZlZmRxbHduc2ptIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzkxNTI4MDgsImV4cCI6MjA5NDcyODgwOH0.EtVQ03ao0z63S5sAMPeGf8FAfGgjcv8Ix9UC8sGkDfw";
 
-        // Исправленное объявление клиента (избегаем конфликта имён)
+        // Глобальный клиент базы данных (имя изменёно на 'db', чтобы не было конфликтов)
         let db = null;
-        try {
-            if (typeof window.supabase !== 'undefined' && SUPABASE_URL.indexOf("your-project") === -1) {
-                db = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-                console.log("Supabase успешно инициализирован.");
-            } else {
-                console.log("Supabase не настроен или библиотека не загружена. Локальный режим.");
-            }
-        } catch(e) {
-            console.error("Критическая ошибка при создании клиента базы данных:", e);
-        }
 
         // --- TON DATA SETTINGS ---
         const MY_TON_WALLET = "UQBT3bJqKbJMgQpWc4I5zPc15ep1eFxwuo-ocyTQ6WyJKV8q";
         const MY_MANIFEST_URL = "https://britva-krot-tg.github.io/Telegram-alc/tonconnect-manifest.json";
 
-        const tg = window.Telegram.WebApp;
+        // Инициализация Telegram WebApp
+        const tg = window.Telegram ? window.Telegram.WebApp : null;
         if (tg) {
-            tg.expand();
-            if (tg.ready) tg.ready();
+            try {
+                tg.expand();
+                if (tg.ready) tg.ready();
+            } catch(e) { console.error(e); }
         }
 
         let tonConnectUI = null;
 
+        // Получение элементов интерфейса
         const scoreEl = document.getElementById('score');
         const usernameEl = document.getElementById('username');
         const clickBtn = document.getElementById('clickBtn');
@@ -475,12 +469,13 @@
         const openShopBtn = document.getElementById('openShopBtn');
         const closeShopBtn = document.getElementById('closeShopBtn');
 
+        // Игровые константы
         const REWARD = 0.0025;
         const MAX_CPS = 9;
         const BASE_ENERGY = 400;
         const REGEN_TIME_MS = 8 * 60 * 60 * 1000;
 
-        // Глобальные переменные состояния
+        // Игровое состояние
         let myTelegramId = 0; 
         let myFirstName = "Player";
         let currentUpgradeLevel = 0;
@@ -489,14 +484,23 @@
         let currentEnergy = BASE_ENERGY;
         let lastClickTime = Date.now();
 
-        // Парсинг Telegram ID пользователя
+        // Определение пользователя
         if (tg && tg.initDataUnsafe && tg.initDataUnsafe.user) {
             myTelegramId = tg.initDataUnsafe.user.id;
-            myFirstName = tg.initDataUnsafe.user.first_name;
-            usernameEl.innerText = myFirstName;
+            myFirstName = tg.initDataUnsafe.user.first_name || "Player";
+            if (usernameEl) usernameEl.innerText = myFirstName;
         } else {
             myTelegramId = 999999999; 
-            usernameEl.innerText = "PC_Test_User";
+            if (usernameEl) usernameEl.innerText = "PC_Test_User";
+        }
+
+        // Функция скрытия лоадера
+        function hideLoadingOverlay() {
+            const loader = document.getElementById('loading-overlay');
+            if (loader) {
+                loader.style.opacity = '0';
+                setTimeout(() => { loader.style.display = 'none'; }, 300);
+            }
         }
 
         function getMaxEnergy() {
@@ -507,34 +511,54 @@
             return BASE_ENERGY;
         }
 
-        function hideLoadingOverlay() {
-            const loader = document.getElementById('loading-overlay');
-            if (loader) {
-                loader.style.opacity = '0';
-                setTimeout(() => loader.style.display = 'none', 300);
+        // Запасная загрузка из локальной памяти телефона
+        function loadFallbackData() {
+            try {
+                score = parseFloat(localStorage.getItem('clicker_score')) || 0.0;
+                currentUpgradeLevel = parseInt(localStorage.getItem('clicker_upgrade_level')) || 0;
+                lastClickTime = parseInt(localStorage.getItem('clicker_last_click_time')) || Date.now();
+                maxEnergy = getMaxEnergy();
+                currentEnergy = localStorage.getItem('clicker_current_energy') !== null ? parseFloat(localStorage.getItem('clicker_current_energy')) : maxEnergy;
+            } catch(e) {
+                score = 0.0;
+                currentUpgradeLevel = 0;
+                maxEnergy = BASE_ENERGY;
+                currentEnergy = BASE_ENERGY;
             }
         }
-
-        // БЕЗОПАСНАЯ КЛАУД-ЗАГРУЗКА
+        // Основная функция загрузки данных
         async function loadPlayerData() {
-            // Если база недоступна, сразу включаем локальное сохранение
+            // Проверяем, подключена ли библиотека Supabase во 2-й части
+            if (typeof window.supabase !== 'undefined' && SUPABASE_URL.indexOf("your-project") === -1) {
+                try {
+                    db = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+                } catch(e) {
+                    console.error("Критическая ошибка создания клиента Supabase:", e);
+                }
+            }
+
             if (!db) {
+                console.log("Работа в автономном локальном режиме.");
                 loadFallbackData();
-                hideLoadingOverlay();
                 return;
             }
 
             try {
-                // Пытаемся получить данные из базы данных
-                const { data: player, error } = await db
-                    .from('players')
-                    .select('*')
-                    .eq('telegram_id', myTelegramId)
-                    .maybeSingle();
+                // Запрашиваем данные игрока с таймаутом безопасности
+                const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout")), 2500));
+                const dbQuery = db.from('players').select('*').eq('telegram_id', myTelegramId).maybeSingle();
+                
+                const response = await Promise.race([dbQuery, timeout]);
+                const player = response ? response.data : null;
 
-                if (error) throw error;
-                if (!player) {
-                    // Создаем нового пользователя
+                if (player) {
+                    score = parseFloat(player.balance) || 0;
+                    currentUpgradeLevel = parseInt(player.upgrade_level) || 0;
+                    lastClickTime = parseInt(player.last_click_time) || Date.now();
+                    maxEnergy = getMaxEnergy();
+                    currentEnergy = player.current_energy !== null ? parseFloat(player.current_energy) : maxEnergy;
+                } else {
+                    // Новый игрок — создаем запись
                     const newPlayer = {
                         telegram_id: myTelegramId,
                         username: myFirstName,
@@ -545,54 +569,31 @@
                     };
                     await db.from('players').insert([newPlayer]);
                     loadFallbackData();
-                } else {
-                    // Загружаем существующего пользователя
-                    score = parseFloat(player.balance) || 0;
-                    currentUpgradeLevel = parseInt(player.upgrade_level) || 0;
-                    lastClickTime = parseInt(player.last_click_time) || Date.now();
-                    maxEnergy = getMaxEnergy();
-                    currentEnergy = player.current_energy !== null ? parseFloat(player.current_energy) : maxEnergy;
                 }
-
             } catch (err) {
-                console.error("Ошибка сети/базы. Переход на LocalStorage:", err);
+                console.warn("Не удалось связаться с облаком, загружаем локальные данные:", err);
                 loadFallbackData();
-            } finally {
-                scoreEl.innerText = score.toFixed(4);
-                regenerateEnergy();
-                hideLoadingOverlay();
             }
         }
 
-        function loadFallbackData() {
-            score = parseFloat(localStorage.getItem('clicker_score')) || 0.0;
-            currentUpgradeLevel = parseInt(localStorage.getItem('clicker_upgrade_level')) || 0;
-            lastClickTime = parseInt(localStorage.getItem('clicker_last_click_time')) || Date.now();
-            maxEnergy = getMaxEnergy();
-            currentEnergy = localStorage.getItem('clicker_current_energy') !== null ? parseFloat(localStorage.getItem('clicker_current_energy')) : maxEnergy;
-        }
-
-        // СИНХРОНИЗАЦИЯ С ОБЛАКОМ И LOCALSTORAGE
+        // Функция сохранения данных
         async function savePlayerData() {
-            localStorage.setItem('clicker_score', score);
-            localStorage.setItem('clicker_current_energy', currentEnergy);
-            localStorage.setItem('clicker_upgrade_level', currentUpgradeLevel);
-            localStorage.setItem('clicker_last_click_time', lastClickTime);
+            try {
+                localStorage.setItem('clicker_score', score);
+                localStorage.setItem('clicker_current_energy', currentEnergy);
+                localStorage.setItem('clicker_upgrade_level', currentUpgradeLevel);
+                localStorage.setItem('clicker_last_click_time', lastClickTime);
 
-            if (db) {
-                try {
-                    await db
-                        .from('players')
-                        .update({ 
-                            balance: score, 
-                            current_energy: currentEnergy, 
-                            upgrade_level: currentUpgradeLevel,
-                            last_click_time: lastClickTime
-                        })
-                        .eq('telegram_id', myTelegramId);
-                } catch(e) {
-                    console.error("Не удалось синхронизировать баланс с облаком:", e);
+                if (db) {
+                    await db.from('players').update({ 
+                        balance: score, 
+                        current_energy: currentEnergy, 
+                        upgrade_level: currentUpgradeLevel,
+                        last_click_time: lastClickTime
+                    }).eq('telegram_id', myTelegramId);
                 }
+            } catch(e) {
+                console.error("Ошибка сохранения данных:", e);
             }
         }
 
@@ -611,49 +612,51 @@
         }
 
         function updateEnergyUI() {
-            maxEnergy = getMaxEnergy();
-            maxEnergyValueEl.innerText = maxEnergy;
-            const displayEnergy = Math.floor(currentEnergy);
-            energyValueEl.innerText = displayEnergy;
-            const percent = (currentEnergy / maxEnergy) * 100;
-            energyFillEl.style.width = percent + '%';
+            try {
+                maxEnergy = getMaxEnergy();
+                if (maxEnergyValueEl) maxEnergyValueEl.innerText = maxEnergy;
+                const displayEnergy = Math.floor(currentEnergy);
+                if (energyValueEl) energyValueEl.innerText = displayEnergy;
+                const percent = (currentEnergy / maxEnergy) * 100;
+                if (energyFillEl) energyFillEl.style.width = percent + '%';
 
-            if (currentEnergy >= maxEnergy) {
-                cooldownTimerEl.innerText = "";
-                } else {
-                const energyNeeded = maxEnergy - currentEnergy;
-                const energyPerMs = maxEnergy / REGEN_TIME_MS;
-                const msRemaining = energyNeeded / energyPerMs;
-                const totalSeconds = Math.ceil(msRemaining / 1000);
-                const hours = Math.floor(totalSeconds / 3600);
-                const minutes = Math.floor((totalSeconds % 3600) / 60);
-                const seconds = totalSeconds % 60;
-
-                const displayHours = String(hours).padStart(2, '0');
-                const displayMinutes = String(minutes).padStart(2, '0');
-                const displaySeconds = String(seconds).padStart(2, '0');
-
-                cooldownTimerEl.innerText = Full in: ${displayHours}:${displayMinutes}:${displaySeconds};
-            }
+                if (cooldownTimerEl) {
+                    if (currentEnergy >= maxEnergy) {
+                        cooldownTimerEl.innerText = "";
+                    } else {
+                        const energyNeeded = maxEnergy - currentEnergy;
+                        const energyPerMs = maxEnergy / REGEN_TIME_MS;
+                        const msRemaining = energyNeeded / energyPerMs;
+                        const totalSeconds = Math.ceil(msRemaining / 1000);
+                        const hours = Math.floor(totalSeconds / 3600);
+                        const minutes = Math.floor((totalSeconds % 3600) / 60);
+                        const seconds = totalSeconds % 60;
+                        cooldownTimerEl.innerText = Full in: ${String(hours).padStart(2,'0')}:${String(minutes).padStart(2,'0')}:${String(seconds).padStart(2,'0')};
+                    }
+                }
+            } catch(e) {}
         }
 
-        openShopBtn.addEventListener('click', (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            updateShopUI();
-            shopModal.classList.add('active');
-        });
+        if (openShopBtn) {
+            openShopBtn.addEventListener('click', (e) => {
+                e.preventDefault(); e.stopPropagation();
+                updateShopUI();
+                if (shopModal) shopModal.classList.add('active');
+            });
+        }
         
-        closeShopBtn.addEventListener('click', (e) => {
-            e.preventDefault();
-            shopModal.classList.remove('active');
-        });
+        if (closeShopBtn) {
+            closeShopBtn.addEventListener('click', (e) => {
+                e.preventDefault();
+                if (shopModal) shopModal.classList.remove('active');
+            });
+        }
 
         function updateShopUI() {
             for (let i = 1; i <= 4; i++) {
                 const btn = document.getElementById(btn-l${i});
                 const row = document.getElementById(item-l${i});
-                if(!btn || !row) continue;
+                if (!btn || !row) continue;
                 
                 if (i <= currentUpgradeLevel) {
                     row.classList.add('bought');
@@ -664,25 +667,21 @@
                 } else {
                     row.classList.remove('bought');
                     btn.disabled = false;
-                    if(i===1) btn.innerText = "2 TON";
-                    if(i===2) btn.innerText = "10 TON";
-                    if(i===3) btn.innerText = "45 TON";
-                    if(i===4) btn.innerText = "85 TON";
+                    if (i===1) btn.innerText = "2 TON";
+                    if (i===2) btn.innerText = "10 TON";
+                    if (i===3) btn.innerText = "45 TON";
+                    if (i===4) btn.innerText = "85 TON";
                 }
             }
         }
 
         async function buyUpgrade(level, priceTon) {
-            if (!tonConnectUI || !tonConnectUI.connected) {
-                return;
-            }
-
+            if (!tonConnectUI || !tonConnectUI.connected) return;
             const nanoAmount = (priceTon * 1000000000).toString();
             const transaction = {
                 validUntil: Math.floor(Date.now() / 1000) + 300,
                 messages: [{ address: MY_TON_WALLET, amount: nanoAmount }]
             };
-
             try {
                 const result = await tonConnectUI.sendTransaction(transaction);
                 if (result) {
@@ -690,49 +689,47 @@
                     maxEnergy = getMaxEnergy();
                     currentEnergy = maxEnergy; 
                     lastClickTime = Date.now();
-                    
                     await savePlayerData(); 
-                    
                     updateEnergyUI();
                     updateShopUI();
                 }
-            } catch (error) {
-                console.log("Transaction canceled.");
-            }
+            } catch (error) {}
         }
 
         let clickTimestamps = [];
         function checkClickRate() {
             const now = Date.now();
-            clickTimestamps = clickTimestamps.filter(timestamp => now - timestamp < 1000);
+            clickTimestamps = clickTimestamps.filter(t => now - t < 1000);
             clickTimestamps.push(now);
             return clickTimestamps.length <= MAX_CPS;
         }
 
         function handleInteraction(clientX, clientY) {
-            if (shopModal.classList.contains('active')) return;
-
+            if (shopModal && shopModal.classList.contains('active')) return;
             const isClickValid = checkClickRate();
             if (!isClickValid) {
-                clickBtn.classList.add('blocked');
+                if (clickBtn) clickBtn.classList.add('blocked');
                 if (tg && tg.HapticFeedback) tg.HapticFeedback.notificationOccurred('error');
                 showWarningText(clientX, clientY, "Too Fast!");
                 return;
             }
+
             regenerateEnergy();
             if (currentEnergy < 1) {
                 if (tg && tg.HapticFeedback) tg.HapticFeedback.notificationOccurred('warning');
                 showWarningText(clientX, clientY, "No Energy! ⚡");
-                clickBtn.style.transform = 'scale(0.9)';
-                setTimeout(() => clickBtn.style.transform = 'scale(1)', 100);
+                if (clickBtn) {
+                    clickBtn.style.transform = 'scale(0.9)';
+                    setTimeout(() => { clickBtn.style.transform = 'scale(1)'; }, 100);
+                }
                 return;
             }
 
-            clickBtn.classList.remove('blocked');
+            if (clickBtn) clickBtn.classList.remove('blocked');
 
             currentEnergy -= 1;
             score += REWARD;
-            scoreEl.innerText = score.toFixed(4);
+            if (scoreEl) scoreEl.innerText = score.toFixed(4);
             lastClickTime = Date.now();
 
             updateEnergyUI();
@@ -743,24 +740,19 @@
         }
 
         function applyTilt(clientX, clientY) {
-            if (clickBtn.classList.contains('blocked') || currentEnergy < 1) return;
+            if (!clickBtn  clickBtn.classList.contains('blocked')  currentEnergy < 1) return;
             const rect = clickBtn.getBoundingClientRect();
-            const coinCenterX = rect.left + rect.width / 2;
-            const coinCenterY = rect.top + rect.height / 2;
-            const deltaX = clientX - coinCenterX;
-            const deltaY = clientY - coinCenterY;
-            const percentX = deltaX / (rect.width / 2);
-            const percentY = deltaY / (rect.height / 2);
-            const maxTilt = 25; 
-            const tiltX = -percentY * maxTilt;
-            const tiltY = percentX * maxTilt;
+            const deltaX = clientX - (rect.left + rect.width / 2);
+            const deltaY = clientY - (rect.top + rect.height / 2);
+            const tiltX = -(deltaY / (rect.height / 2)) * 25;
+            const tiltY = (deltaX / (rect.width / 2)) * 25;
 
             clickBtn.style.transition = 'none';
             clickBtn.style.transform = rotateX(${tiltX}deg) rotateY(${tiltY}deg) scale(0.95);
             clickBtn.style.filter = 'brightness(0.9)';
 
             setTimeout(() => {
-                if (!clickBtn.classList.contains('blocked')) {
+                if (clickBtn && !clickBtn.classList.contains('blocked')) {
                     clickBtn.style.transition = 'transform 0.05s ease-out, filter 0.05s ease-out';
                     clickBtn.style.transform = 'rotateX(0deg) rotateY(0deg) scale(1)';
                     clickBtn.style.filter = 'brightness(1)';
@@ -770,22 +762,24 @@
 
         setInterval(() => {
             const now = Date.now();
-            clickTimestamps = clickTimestamps.filter(timestamp => now - timestamp < 1000);
-            if (clickTimestamps.length <= MAX_CPS && currentEnergy >= 1) {
+            clickTimestamps = clickTimestamps.filter(t => now - t < 1000);
+            if (clickBtn && clickTimestamps.length <= MAX_CPS && currentEnergy >= 1) {
                 clickBtn.classList.remove('blocked');
             }
         }, 500);
 
-        clickBtn.addEventListener('touchstart', (e) => {
-            e.preventDefault();
-            for (let i = 0; i < e.changedTouches.length; i++) {
-                handleInteraction(e.changedTouches[i].clientX, e.changedTouches[i].clientY);
-            }
-        }, { passive: false });
+        if (clickBtn) {
+            clickBtn.addEventListener('touchstart', (e) => {
+                e.preventDefault();
+                for (let i = 0; i < e.changedTouches.length; i++) {
+                    handleInteraction(e.changedTouches[i].clientX, e.changedTouches[i].clientY);
+                }
+            }, { passive: false });
 
-        clickBtn.addEventListener('mousedown', (e) => {
-            handleInteraction(e.clientX, e.clientY);
-        });
+            clickBtn.addEventListener('mousedown', (e) => {
+                handleInteraction(e.clientX, e.clientY);
+            });
+        }
 
         function showPlusText(x, y) {
             const text = document.createElement('div');
@@ -802,37 +796,43 @@
         }
 
         function setupFloatingTextPosition(text, x, y) {
+            if (!clickArea) return;
             const rect = clickArea.getBoundingClientRect();
-            const relativeX = x - rect.left;
-            const relativeY = y - rect.top;
-            text.style.left = relativeX + 'px';
-            text.style.top = relativeY + 'px';
+            text.style.left = (x - rect.left) + 'px';
+            text.style.top = (y - rect.top) + 'px';
             clickArea.appendChild(text);
-            setTimeout(() => text.remove(), 800);
+            setTimeout(() => { text.remove(); }, 800);
         }
         
+        // Гарантированная единая точка инициализации
         window.addEventListener('DOMContentLoaded', () => {
-            // Запускаем загрузку данных аккаунта
-            loadPlayerData();
+            // Сначала запускаем обработку данных
+            loadPlayerData().then(() => {
+                if (scoreEl) scoreEl.innerText = score.toFixed(4);
+                regenerateEnergy();
+            }).catch(e => {
+                console.error(e);
+                loadFallbackData();
+            }).finally(() => {
+                // В ЛЮБОМ случае скрываем загрузку
+                hideLoadingOverlay();
+            });
 
-            // Абсолютная железная гарантия: если через 1.5 секунды экран загрузки 
-            // всё еще висит — убираем его принудительно, чтобы дать пользователю играть!
-            setTimeout(hideLoadingOverlay, 1500);
+            // Железный предохранитель: если асинхронный метод зависнет, лоадер скроется через 1 секунду
+            setTimeout(hideLoadingOverlay, 1000);
+
+            // Инициализация TON UI
             setTimeout(() => {
                 try {
                     if (typeof TON_CONNECT_UI !== 'undefined') {
                         tonConnectUI = new TON_CONNECT_UI.TonConnectUI({
                             manifestUrl: MY_MANIFEST_URL,
                             buttonRootId: 'ton-connect-btn',
-                            uiOptions: {
-                                uiPreferences: {
-                                    theme: 'DARK'
-                                }
-                            }
+                            uiOptions: { uiPreferences: { theme: 'DARK' } }
                         });
                     }
                  } catch(err){}
-            }, 500);
+            }, 400);
         });
 
         setInterval(regenerateEnergy, 1000);
